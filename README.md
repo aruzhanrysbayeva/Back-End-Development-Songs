@@ -38,4 +38,13 @@ MONGODB_MOCK=1 is available for isolated tests only. The recorded verification u
 
 ## Submission status
 
-Prepared and tested locally. Published to https://github.com/aruzhanrysbayeva/Back-End-Development-Songs. IBM Cloud deployment is pending. Local screenshots and execution reports document local execution.
+Prepared and tested locally. Published to https://github.com/aruzhanrysbayeva/Back-End-Development-Songs. IBM Cloud deployment was verified; local and cloud evidence are identified separately.
+
+
+## Verified cloud deployment
+
+OpenShift Deployment and HTTPS Route, real internal MongoDB 7.0, MONGODB_SEED=1. Public /health returned status OK.
+
+Application: https://songs-sn-labs-chalkyretro2.labs-prod-openshift-san-a45631dc5778dc6371c67d206ba9ae5c-0000.us-east.containers.appdomain.cloud
+
+The course lab is temporary. MongoDB and SQLite use demonstration storage; do not treat this environment as a persistent production deployment. No administrator password or service secret is committed.
