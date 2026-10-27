@@ -38,4 +38,4 @@ MONGODB_MOCK=1 is available for isolated tests only. The recorded verification u
 
 ## Submission status
 
-Prepared and tested locally. Not yet published to the learner GitHub account or deployed to IBM Cloud. Local screenshots and execution reports must not be described as cloud deployment evidence.
+Prepared and tested locally. Published to https://github.com/aruzhanrysbayeva/Back-End-Development-Songs. IBM Cloud deployment is pending. Local screenshots and execution reports document local execution.
