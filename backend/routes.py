@@ -1,53 +1,98 @@
-from . import app
-import os
+"""Songs REST API backed by MongoDB; mock storage is opt-in for tests."""
 import json
-import pymongo
-from flask import jsonify, request, make_response, abort, url_for  # noqa; F401
-from pymongo import MongoClient
+import os
+from pathlib import Path
+from urllib.parse import quote_plus
+from flask import jsonify, request
 from bson import json_util
-from pymongo.errors import OperationFailure
-from pymongo.results import InsertOneResult
-from bson.objectid import ObjectId
-import sys
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError, DuplicateKeyError
+from . import app
 
-SITE_ROOT = os.path.realpath(os.path.dirname(__file__))
-json_url = os.path.join(SITE_ROOT, "data", "songs.json")
-songs_list: list = json.load(open(json_url))
-
-# client = MongoClient(
-#     f"mongodb://{app.config['MONGO_USERNAME']}:{app.config['MONGO_PASSWORD']}@localhost")
-mongodb_service = os.environ.get('MONGODB_SERVICE')
-mongodb_username = os.environ.get('MONGODB_USERNAME')
-mongodb_password = os.environ.get('MONGODB_PASSWORD')
-mongodb_port = os.environ.get('MONGODB_PORT')
-
-print(f'The value of MONGODB_SERVICE is: {mongodb_service}')
-
-if mongodb_service == None:
-    app.logger.error('Missing MongoDB server in the MONGODB_SERVICE variable')
-    # abort(500, 'Missing MongoDB server in the MONGODB_SERVICE variable')
-    sys.exit(1)
-
-if mongodb_username and mongodb_password:
-    url = f"mongodb://{mongodb_username}:{mongodb_password}@{mongodb_service}"
+if os.getenv('MONGODB_MOCK') == '1':
+    from mongomock import MongoClient
+    client = MongoClient()
 else:
-    url = f"mongodb://{mongodb_service}"
-
-
-print(f"connecting to url: {url}")
-
-try:
-    client = MongoClient(url)
-except OperationFailure as e:
-    app.logger.error(f"Authentication error: {str(e)}")
-
+    uri = os.getenv('MONGODB_URI')
+    if not uri:
+        host = os.getenv('MONGODB_SERVICE', 'localhost')
+        port = os.getenv('MONGODB_PORT', '27017')
+        user = os.getenv('MONGODB_USERNAME')
+        password = os.getenv('MONGODB_PASSWORD')
+        credentials = f'{quote_plus(user)}:{quote_plus(password)}@' if user and password else ''
+        uri = f'mongodb://{credentials}{host}:{port}'
+    client = MongoClient(uri, serverSelectionTimeoutMS=5000)
 db = client.songs
-db.songs.drop()
-db.songs.insert_many(songs_list)
 
-def parse_json(data):
-    return json.loads(json_util.dumps(data))
+def initialize_database():
+    """Seed missing songs without dropping existing user data."""
+    db.songs.create_index('id', unique=True)
+    seed = json.loads((Path(__file__).parent / 'data' / 'songs.json').read_text())
+    for song in seed:
+        db.songs.update_one({'id': song['id']}, {'$setOnInsert': song}, upsert=True)
 
-######################################################################
-# INSERT CODE HERE
-######################################################################
+def parse_json(value):
+    return json.loads(json_util.dumps(value))
+
+@app.errorhandler(PyMongoError)
+def database_error(error):
+    app.logger.error('MongoDB request failed: %s', type(error).__name__)
+    return jsonify(message='Database service unavailable'), 503
+
+@app.get('/health')
+def health():
+    client.admin.command('ping')
+    return jsonify(status='OK'), 200
+
+@app.get('/count')
+def count():
+    return jsonify(length=db.songs.count_documents({})), 200
+
+@app.get('/song')
+def get_songs():
+    return jsonify(parse_json(list(db.songs.find({})))), 200
+
+@app.get('/song/<int:id>')
+def get_song_by_id(id):
+    song = db.songs.find_one({'id': id})
+    if song is None:
+        return jsonify(message='song with id not found'), 404
+    return jsonify(parse_json(song)), 200
+
+def incoming_song():
+    song = request.get_json()
+    if not isinstance(song, dict) or not isinstance(song.get('id'), int):
+        return None
+    return {key: song[key] for key in ('id', 'title', 'lyrics') if key in song}
+
+@app.post('/song')
+def create_song():
+    song = incoming_song()
+    if song is None:
+        return jsonify(message='A JSON object with an integer id is required'), 400
+    if db.songs.find_one({'id': song['id']}):
+        return jsonify(message=f"song with id {song['id']} already present"), 302
+    try:
+        db.songs.insert_one(song)
+    except DuplicateKeyError:
+        return jsonify(message=f"song with id {song['id']} already present"), 302
+    return jsonify(parse_json(song)), 201
+
+@app.put('/song/<int:id>')
+def update_song(id):
+    song = incoming_song()
+    if song is None or song['id'] != id:
+        return jsonify(message='A matching integer id is required'), 400
+    result = db.songs.update_one({'id': id}, {'$set': song})
+    if not result.matched_count:
+        return jsonify(message='song with id not found'), 404
+    return jsonify(parse_json(db.songs.find_one({'id': id}))), 200
+
+@app.delete('/song/<int:id>')
+def delete_song(id):
+    if not db.songs.delete_one({'id': id}).deleted_count:
+        return jsonify(message='song with id not found'), 404
+    return '', 204
+
+if os.getenv('MONGODB_SEED') == '1':
+    initialize_database()
